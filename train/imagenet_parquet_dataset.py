@@ -97,6 +97,24 @@ class ImageNetParquetDataset(Dataset):
         
         print(f"Parsed {len(self.image_locations)} image locations")
         
+        # Validate that parquet directory and files exist
+        if not os.path.exists(self.parquet_dir):
+            raise FileNotFoundError(
+                f"Parquet directory not found: {self.parquet_dir}\n"
+                f"Please ensure the parquet files are at this location or update the path."
+            )
+        
+        # Check if at least the first parquet file exists
+        if self.image_locations:
+            first_parquet = self.image_locations[0][0]
+            if not os.path.exists(first_parquet):
+                raise FileNotFoundError(
+                    f"Parquet file not found: {first_parquet}\n"
+                    f"Expected format: {split}-#####-of-{total_files:05d}.parquet\n"
+                    f"Parquet directory: {self.parquet_dir}\n"
+                    f"Available files: {os.listdir(self.parquet_dir) if os.path.exists(self.parquet_dir) else 'directory not found'}"
+                )
+        
         # Get unique parquet files
         unique_parquets = set(loc[0] for loc in self.image_locations)
         print(f"Dataset spans {len(unique_parquets)} parquet files from {split} split")
