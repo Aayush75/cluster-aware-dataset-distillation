@@ -55,7 +55,7 @@ if [ "$DEBUG" = true ]; then
     IPC=2
 fi
 
-if [[ "${DATASET}" == "tiny-imagenet" || "${DATASET}" == "cifar100" ]]; then
+if [[ "${DATASET}" == "tiny-imagenet" ]]; then
     # Only set R_BN and LR if they weren't provided as command-line arguments
     : ${R_BN:=1.0}
     : ${LR:=0.1}
@@ -72,12 +72,7 @@ else
     KD_BATCH_SIZE=100
 fi
 
-# Set data path - handle special case for imagenet with data subfolder
-if [[ "${DATASET}" == "imagenet" ]]; then
-    DATA_PATH="${DATA_ROOT}imagenet_data"
-else
-    DATA_PATH="${DATA_ROOT}${DATASET}"
-fi
+DATA_PATH="${DATA_ROOT}${DATASET}"
 
 start=$(date +%s%N) # %s%N for seconds and nanoseconds
 
@@ -106,13 +101,6 @@ else
     SYNTHESIS_SCRIPT="data_synthesis.py"
 fi
 
-# Add parquet support for ImageNet-1K
-PARQUET_ARGS=""
-if [[ "${DATASET}" == "imagenet" ]]; then
-    CSV_ROOT="/home/ssl.distillation/clustering/results/temi_imagenet-1k_1000clusters_20251224_194551/pseudo_labels/"
-    PARQUET_ARGS="--use-parquet-dataset --parquet-data-dir ${DATA_PATH}/data --pseudo-label-csv ${CSV_ROOT}train_image_pseudo_labels.csv"
-fi
-
 CUDA_VISIBLE_DEVICES=${GPU} python $SYNTHESIS_SCRIPT \
     --dataset ${DATASET} \
     --model ${MODEL} \
@@ -125,7 +113,6 @@ CUDA_VISIBLE_DEVICES=${GPU} python $SYNTHESIS_SCRIPT \
     --lr ${LR} \
     --iteration ${ITERATION} \
     --l2-scale 0 \
-    ${PARQUET_ARGS}
     --tv-l2 0 \
     --r-bn ${R_BN} \
     --verifier \

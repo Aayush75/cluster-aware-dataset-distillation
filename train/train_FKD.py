@@ -21,14 +21,6 @@ from utils import AverageMeter, accuracy, get_parameters
 sys.path.append('..')
 from relabel.utils_fkd import ImageFolder_FKD_MIX, ComposeWithCoords, RandomResizedCropWithCoords, RandomHorizontalFlipWithRes, mix_aug, load_weights_file
 
-# Import custom parquet dataset for ImageNet-1K
-try:
-    from imagenet_parquet_dataset import ImageNetParquetDatasetFKD
-    PARQUET_DATASET_AVAILABLE = True
-except ImportError:
-    PARQUET_DATASET_AVAILABLE = False
-    print("Warning: imagenet_parquet_dataset not available. ImageNet-1K with parquet will not work.")
-
 def collate_fn_fkd(batch):
     """Custom collate function for FKD dataloader"""
     images = torch.stack([item[0] for item in batch])
@@ -95,10 +87,6 @@ def get_args():
                         default=None, help='path to fkd label')
     parser.add_argument('--pseudo-label-csv', type=str, default=None,
                         help='path to CSV file with pseudo labels for training only')
-    parser.add_argument('--use-parquet-dataset', action='store_true',
-                        help='use parquet dataset for ImageNet-1K (no extraction needed)')
-    parser.add_argument('--parquet-data-dir', type=str, default=None,
-                        help='directory containing parquet files (if using parquet dataset)')
     parser.add_argument('--mix-type', default=None, type=str,
                         choices=['mixup', 'cutmix', None], help='mixup or cutmix or None')
     parser.add_argument('--fkd_seed', default=42, type=int,
@@ -121,131 +109,88 @@ def main():
     if not torch.cuda.is_available():
         raise Exception("need gpu to train!")
 
-    # For parquet dataset, train_dir check is not needed
-    if not args.use_parquet_dataset:
-        assert os.path.exists(args.train_dir)
-    
+
+    assert os.path.exists(args.train_dir)
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
     # Data loading
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-    
-    # Check if using parquet dataset (for ImageNet-1K)
-    use_parquet = args.use_parquet_dataset and args.dataset == 'imagenet' and args.pseudo_label_csv is not None
-    
-    if use_parquet:
-        print("="*60)
-        print("Using PARQUET DATASET for ImageNet-1K (no extraction needed)")
-        print("="*60)
-        
-        if not PARQUET_DATASET_AVAILABLE:
-            raise ImportError("imagenet_parquet_dataset module not found. Cannot use parquet dataset.")
-        
-        if args.parquet_data_dir is None:
-            raise ValueError("--parquet-data-dir must be specified when using --use-parquet-dataset")
-        
-        # Create parquet dataset
-        train_transform = transforms.Compose([
-            transforms.RandomResizedCrop(args.input_size, scale=(0.08, 1), 
-                                          interpolation=InterpolationMode.BILINEAR),
-            transforms.RandomHorizontalFlip(),
+    # load the weights of barycenters (if available)
+    weight_file = os.path.join(args.train_dir, 'sample_weights.txt')
+    if os.path.exists(weight_file):
+        bary_weights_map = load_weights_file(args.train_dir, weight_file)
+    else:
+        # Create dummy weights map (all weights = 1.0) for real dataset training
+        print("No sample_weights.txt found, using uniform weights (1.0 for all images)")
+        bary_weights_map = {}
+
+    train_dataset = ImageFolder_FKD_MIX(
+        fkd_path=args.fkd_path if args.fkd_path != "dummy" else None,
+        mode=args.mode,
+        weights_map=bary_weights_map,
+        args_epoch=args.epochs if args.mode == 'fkd_load' else None,
+        args_bs=args.batch_size if args.mode == 'fkd_load' else None,
+        root=args.train_dir,
+        transform=ComposeWithCoords(transforms=[
+            RandomResizedCropWithCoords(size=args.input_size,
+                                        scale=(0.08, 1),
+                                        interpolation=InterpolationMode.BILINEAR),
+            RandomHorizontalFlipWithRes(),
             transforms.ToTensor(),
             normalize,
-        ])
-        
-        train_dataset = ImageNetParquetDatasetFKD(
-            parquet_dir=args.parquet_data_dir,
-            csv_path=args.pseudo_label_csv,
-            label_column='pseudo_label_class_index',
-            transform=train_transform,
-            cache_parquet=False,  # Don't cache to avoid memory issues
-            weights_map={},
-            mode=args.mode,
-            args_epoch=args.epochs if args.mode == 'fkd_load' else None,
-            args_bs=args.batch_size if args.mode == 'fkd_load' else None
-        )
-        
-        print(f"Parquet dataset loaded: {len(train_dataset)} images")
-        
-    else:
-        # Original ImageFolder-based loading
-        # load the weights of barycenters (if available)
-        weight_file = os.path.join(args.train_dir, 'sample_weights.txt')
-        if os.path.exists(weight_file):
-            bary_weights_map = load_weights_file(args.train_dir, weight_file)
-        else:
-            # Create dummy weights map (all weights = 1.0) for real dataset training
-            print("No sample_weights.txt found, using uniform weights (1.0 for all images)")
-            bary_weights_map = {}
+        ]))
 
-        train_dataset = ImageFolder_FKD_MIX(
-            fkd_path=args.fkd_path if args.fkd_path != "dummy" else None,
-            mode=args.mode,
-            weights_map=bary_weights_map,
-            args_epoch=args.epochs if args.mode == 'fkd_load' else None,
-            args_bs=args.batch_size if args.mode == 'fkd_load' else None,
-            root=args.train_dir,
-            transform=ComposeWithCoords(transforms=[
-                RandomResizedCropWithCoords(size=args.input_size,
-                                            scale=(0.08, 1),
-                                            interpolation=InterpolationMode.BILINEAR),
-                RandomHorizontalFlipWithRes(),
-                transforms.ToTensor(),
-                normalize,
-            ]))
+    # If a CSV of pseudo-labels is provided, apply those labels to the training dataset only
+    if args.pseudo_label_csv is not None:
+        csv_path = args.pseudo_label_csv
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"pseudo-label CSV not found: {csv_path}")
 
-        # If a CSV of pseudo-labels is provided, apply those labels to the training dataset only
-        # (Skip this for parquet dataset as labels are already loaded)
-        if args.pseudo_label_csv is not None:
-            csv_path = args.pseudo_label_csv
-            if not os.path.exists(csv_path):
-                raise FileNotFoundError(f"pseudo-label CSV not found: {csv_path}")
+        csv_map = {}
+        with open(csv_path, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                raw = row.get('image_path')
+                if raw is None:
+                    continue
+                img_rel = raw.strip().strip('"').strip()
+                img_rel = img_rel.replace('\\', '/')
+                label_val = row.get('pseudo_label_class_index')
+                if label_val is None:
+                    continue
+                lbl = int(label_val.strip().strip('"'))
+                csv_map[img_rel] = lbl
 
-            csv_map = {}
-            with open(csv_path, newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    raw = row.get('image_path')
-                    if raw is None:
-                        continue
-                    img_rel = raw.strip().strip('"').strip()
-                    img_rel = img_rel.replace('\\', '/')
-                    label_val = row.get('pseudo_label_class_index')
-                    if label_val is None:
-                        continue
-                    lbl = int(label_val.strip().strip('"'))
-                    csv_map[img_rel] = lbl
+        # Apply mapping to train_dataset.samples
+        new_samples = []
+        new_targets = []
+        unmatched = 0
+        for (full_path, orig_target) in train_dataset.samples:
+            rel = os.path.relpath(full_path, args.train_dir).replace('\\', '/')
+            rel_candidates = [rel, './' + rel, rel.lstrip('./')]
+            matched = False
+            for key in rel_candidates:
+                if key in csv_map:
+                    new_t = csv_map[key]
+                    matched = True
+                    break
+            if not matched:
+                base = os.path.basename(full_path)
+                if base in csv_map:
+                    new_t = csv_map[base]
+                    matched = True
+            if not matched:
+                new_t = orig_target
+                unmatched += 1
 
-            # Apply mapping to train_dataset.samples
-            new_samples = []
-            new_targets = []
-            unmatched = 0
-            for (full_path, orig_target) in train_dataset.samples:
-                rel = os.path.relpath(full_path, args.train_dir).replace('\\', '/')
-                rel_candidates = [rel, './' + rel, rel.lstrip('./')]
-                matched = False
-                for key in rel_candidates:
-                    if key in csv_map:
-                        new_t = csv_map[key]
-                        matched = True
-                        break
-                if not matched:
-                    base = os.path.basename(full_path)
-                    if base in csv_map:
-                        new_t = csv_map[base]
-                        matched = True
-                if not matched:
-                    new_t = orig_target
-                    unmatched += 1
+            new_samples.append((full_path, new_t))
+            new_targets.append(new_t)
 
-                new_samples.append((full_path, new_t))
-                new_targets.append(new_t)
-
-            train_dataset.samples = new_samples
-            train_dataset.targets = new_targets
-            print(f"Applied pseudo-label CSV: {csv_path}. Unmatched samples: {unmatched}")
+        train_dataset.samples = new_samples
+        train_dataset.targets = new_targets
+        print(f"Applied pseudo-label CSV: {csv_path}. Unmatched samples: {unmatched}")
 
     generator = torch.Generator()
     generator.manual_seed(args.fkd_seed)
@@ -263,47 +208,7 @@ def main():
         num_workers=0, pin_memory=True, collate_fn=collate_fn_fkd)
 
     # load validation data
-    if use_parquet and args.val_dir is not None:
-        # For parquet dataset, validation might also need special handling
-        # Check if we have a validation CSV
-        val_csv_path = args.pseudo_label_csv.replace('train_image_pseudo_labels', 'test_image_pseudo_labels')
-        
-        if os.path.exists(val_csv_path):
-            print(f"Using parquet dataset for validation: {val_csv_path}")
-            val_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ])
-            
-            from imagenet_parquet_dataset import ImageNetParquetDataset
-            val_dataset = ImageNetParquetDataset(
-                parquet_dir=args.parquet_data_dir,
-                csv_path=val_csv_path,
-                label_column='true_label_index',  # Use true labels for validation
-                transform=val_transform,
-                cache_parquet=False
-            )
-            
-            val_loader = torch.utils.data.DataLoader(
-                val_dataset,
-                batch_size=int(args.batch_size/4), shuffle=False,
-                num_workers=args.workers, pin_memory=True)
-        else:
-            print(f"Warning: Validation CSV not found at {val_csv_path}")
-            print("Falling back to ImageFolder for validation (requires extracted images)")
-            # Fallback to ImageFolder
-            val_loader = torch.utils.data.DataLoader(
-                datasets.ImageFolder(args.val_dir, transforms.Compose([
-                    transforms.Resize(256),
-                    transforms.CenterCrop(224),
-                    transforms.ToTensor(),
-                    normalize,
-                ])),
-                batch_size=int(args.batch_size/4), shuffle=False,
-                num_workers=args.workers, pin_memory=True)
-    elif args.input_size == 224:
+    if args.input_size == 224:
         val_loader = torch.utils.data.DataLoader(
             datasets.ImageFolder(args.val_dir, transforms.Compose([
                 transforms.Resize(256),

@@ -25,15 +25,6 @@ from models.factory import ModelFactory
 import time
 import shutil
 
-# Import parquet dataset support
-try:
-    sys.path.append('../train')
-    from imagenet_parquet_dataset import ImageNetParquetDataset
-    PARQUET_AVAILABLE = True
-except ImportError:
-    PARQUET_AVAILABLE = False
-    print("Warning: Parquet dataset not available for synthesis")
-
 def prepare_model(args):
     # model = models.__dict__[args.model](pretrained=not args.ckpt_path, num_classes=args.num_classes)
     # model = resnet18(args, num_classes=args.num_classes)
@@ -61,16 +52,7 @@ def prepare_model(args):
         p.requires_grad = False
     return model
 
-def prepare_data(dataset_root, use_parquet=False, parquet_dir=None, csv_path=None):
-    """
-    Prepare dataset - supports both ImageFolder and Parquet formats.
-    
-    Args:
-        dataset_root: Root directory for ImageFolder format
-        use_parquet: Whether to use parquet dataset
-        parquet_dir: Directory containing parquet files (if use_parquet=True)
-        csv_path: Path to CSV with pseudo labels (if use_parquet=True)
-    """
+def prepare_data(dataset_root):
     preprocess = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
@@ -78,34 +60,10 @@ def prepare_data(dataset_root, use_parquet=False, parquet_dir=None, csv_path=Non
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    if use_parquet:
-        if not PARQUET_AVAILABLE:
-            raise ImportError("Parquet dataset not available. Install required packages.")
-        if parquet_dir is None or csv_path is None:
-            raise ValueError("parquet_dir and csv_path required when use_parquet=True")
-        
-        print(f"Loading parquet dataset from: {parquet_dir}")
-        dataset = ImageNetParquetDataset(
-            parquet_dir=parquet_dir,
-            csv_path=csv_path,
-            label_column='pseudo_label_class_index',
-            transform=preprocess,
-            cache_parquet=False
-        )
-        
-        # Get sorted class names (cluster_0000, cluster_0001, etc.)
-        unique_labels = sorted(set(dataset.targets))
-        sorted_class_names = [f"cluster_{label:04d}" for label in unique_labels]
-        
-        # Create a mapping for compatibility with ImageFolder interface
-        dataset.class_to_idx = {name: idx for idx, name in enumerate(sorted_class_names)}
-        
-        return dataset, sorted_class_names
-    else:
-        dataset = datasets.ImageFolder(root=dataset_root, transform=preprocess)
-        sorted_classes = sorted(dataset.class_to_idx.items(), key=lambda x: x[1])
-        sorted_class_names = [item[0] for item in sorted_classes]
-        return dataset, sorted_class_names
+    dataset = datasets.ImageFolder(root=dataset_root, transform=preprocess)
+    sorted_classes = sorted(dataset.class_to_idx.items(), key=lambda x: x[1])
+    sorted_class_names = [item[0] for item in sorted_classes]
+    return dataset, sorted_class_names
 
 def get_images(args, model_teacher, hook_for_display, ipc_id, bc_i=None, weights=None):
     print("get_images call")
@@ -298,68 +256,38 @@ def get_bary(args):
     model_teacher = prepare_model(args)
     feature_hook = EmbedderHook(model_teacher.module.avgpool)
 
-    # Determine if using parquet dataset
-    use_parquet = hasattr(args, 'use_parquet_dataset') and args.use_parquet_dataset and args.dataset == 'imagenet'
-    
-    if use_parquet:
-        dataset, sorted_class_names = prepare_data(
-            dataset_root=None,
-            use_parquet=True,
-            parquet_dir=args.parquet_data_dir,
-            csv_path=args.pseudo_label_csv
-        )
-    else:
-        dataset_root = os.path.join(args.real_data_path, 'train')
-        dataset, sorted_class_names = prepare_data(dataset_root)
+    dataset_root = os.path.join(args.real_data_path, 'train')
+    dataset, sorted_class_names = prepare_data(dataset_root)
 
     barycenters = []
     weights = []
     batch_size = args.batch_size
 
-    # Iterate over each class
-    for class_idx, class_name in enumerate(sorted_class_names):
-        print(f"Processing class {class_idx + 1}/{len(sorted_class_names)}: {class_name}")
-        
-        if use_parquet:
-            # For parquet dataset, filter by target label
-            class_samples = torch.utils.data.Subset(
-                dataset, 
-                indices=[i for i, t in enumerate(dataset.targets) if t == class_idx]
-            )
-        else:
-            # For ImageFolder, use directory-based filtering
-            class_dir = os.path.join(dataset_root, class_name)
-            if os.path.isdir(class_dir):
-                class_indices = dataset.class_to_idx[class_name]
-                class_samples = torch.utils.data.Subset(
-                    dataset, 
-                    indices=[i for i, t in enumerate(dataset.targets) if t == class_indices]
-                )
-            else:
-                continue
-        
-        class_loader = DataLoader(class_samples, batch_size=batch_size, shuffle=False)
+    # Iterate over each class directory
+    for class_name in sorted_class_names:
+        class_dir = os.path.join(dataset_root, class_name)
 
-        # Extract features for each batch and store
-        feature_ls = []
+        if os.path.isdir(class_dir):
+            class_indices = dataset.class_to_idx[class_name]
+            class_samples = torch.utils.data.Subset(dataset, indices=[i for i, t in enumerate(dataset.targets) if
+                                                                      t == class_indices])
+            class_loader = DataLoader(class_samples, batch_size=batch_size, shuffle=False)
 
-        for batch_images, _ in class_loader:
-            batch_images = batch_images.cuda()
-            with torch.no_grad():
-                _ = model_teacher(batch_images)
-                feature = feature_hook.feature
-            feature_ls.append(feature)
+            # Extract features for each batch and store
+            feature_ls = []
 
-        if len(feature_ls) == 0:
-            print(f"Warning: No samples found for class {class_name}")
-            continue
+            for batch_images, _ in class_loader:
+                with torch.no_grad():
+                    _ = model_teacher(batch_images)
+                    feature = feature_hook.feature
+                feature_ls.append(feature)
 
-        feature_ls = torch.cat(feature_ls)
-        feature_ls = feature_ls.view(feature_ls.shape[0], -1).cpu().detach().numpy()
-        # Compute the barycenter for the extracted features
-        barycenter, weight = compute_wasserstein_barycenter(feature_ls, args.ipc, args.weight_wb)
-        barycenters.append(barycenter)
-        weights.append(weight)
+            feature_ls = torch.cat(feature_ls)
+            feature_ls = feature_ls.view(feature_ls.shape[0], -1).cpu().detach().numpy()
+            # Compute the barycenter for the extracted features
+            barycenter, weight = compute_wasserstein_barycenter(feature_ls, args.ipc, args.weight_wb)
+            barycenters.append(barycenter)
+            weights.append(weight)
 
     barycenters = np.stack(barycenters)
     weights = np.stack(weights)
@@ -458,15 +386,6 @@ def get_args():
     parser.add_argument("--easy2hard-mode", default="cosine", type=str, choices=["step", "linear", "cosine"])
     parser.add_argument("--milestone", default=0, type=float)
     parser.add_argument("--G", default="-1", type=str)
-    
-    """Parquet dataset support"""
-    parser.add_argument('--use-parquet-dataset', action='store_true',
-                        help='use parquet dataset for ImageNet-1K (no extraction needed)')
-    parser.add_argument('--parquet-data-dir', type=str, default=None,
-                        help='directory containing parquet files (if using parquet dataset)')
-    parser.add_argument('--pseudo-label-csv', type=str, default=None,
-                        help='path to CSV file with pseudo labels (required for parquet dataset)')
-    
     args = parser.parse_args()
 
     args.syn_data_path = os.path.join(args.syn_data_path, args.dataset, args.exp_name)
