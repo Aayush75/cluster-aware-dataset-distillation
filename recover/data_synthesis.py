@@ -309,11 +309,7 @@ def get_bary(args):
             csv_path=args.pseudo_label_csv
         )
     else:
-        # For ImageFolder datasets, append 'train' subdirectory
-        if args.dataset == 'imagenet':
-            dataset_root = args.real_data_path
-        else:
-            dataset_root = os.path.join(args.real_data_path, 'train')
+        dataset_root = os.path.join(args.real_data_path, 'train')
         dataset, sorted_class_names = prepare_data(dataset_root)
 
     barycenters = []
@@ -378,33 +374,19 @@ def main_syn(args, bc_i=None, weights=None):
     model_teacher = prepare_model(args)
     if args.per_class_bn:
         # Computing per-class batchnorm statistics
-        use_parquet = args.use_parquet_dataset and args.dataset == 'imagenet'
-        
-        if use_parquet:
-            dataset, sorted_class_names = prepare_data(
-                dataset_root=None,
-                use_parquet=True,
-                parquet_dir=args.parquet_data_dir,
-                csv_path=args.pseudo_label_csv
-            )
-        else:
-            if args.dataset == 'imagenet':
-                dataset_root = args.real_data_path
-            else:
-                dataset_root = os.path.join(args.real_data_path, 'train')
-            dataset, sorted_class_names = prepare_data(dataset_root)
-        
-        for class_idx, class_name in enumerate(sorted_class_names):
-            class_samples = torch.utils.data.Subset(
-                dataset, 
-                indices=[i for i, t in enumerate(dataset.targets) if t == class_idx]
-            )
-            class_loader = DataLoader(class_samples, batch_size=args.batch_size, shuffle=False)
+        dataset_root = os.path.join(args.real_data_path, 'train')
+        dataset, sorted_class_names = prepare_data(dataset_root)
+        for class_name in sorted_class_names:
+            class_dir = os.path.join(dataset_root, class_name)
+            if os.path.isdir(class_dir):
+                class_indices = dataset.class_to_idx[class_name]
+                class_samples = torch.utils.data.Subset(dataset, indices=[i for i, t in enumerate(dataset.targets) if
+                                                                          t == class_indices])
+                class_loader = DataLoader(class_samples, batch_size=args.batch_size, shuffle=False)
 
-            for batch_images, _ in class_loader:
-                with torch.no_grad():
-                    _ = model_teacher(batch_images, torch.tensor([class_idx]))
-        
+                for batch_images, _ in class_loader:
+                    with torch.no_grad():
+                        _ = model_teacher(batch_images, torch.tensor([class_indices]))
         for module in model_teacher.modules():
             if isinstance(module, BatchNorm2dWithPerClassStats):
                 module.finalize_statistics()
