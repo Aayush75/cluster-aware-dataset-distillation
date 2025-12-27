@@ -19,6 +19,15 @@ from utils import save_arguments
 sys.path.append('..')
 from models.factory import ModelFactory
 
+# Import parquet dataset support
+try:
+    sys.path.append('../train')
+    from imagenet_parquet_dataset import ImageNetParquetDataset
+    PARQUET_AVAILABLE = True
+except ImportError:
+    PARQUET_AVAILABLE = False
+    print("Warning: Parquet dataset not available for pretraining")
+
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -124,52 +133,77 @@ def load_data(traindir, valdir, args):
     )
     interpolation = InterpolationMode(args.interpolation)
 
+    # Check if using parquet dataset
+    use_parquet = getattr(args, 'use_parquet_dataset', False) and args.dataset == 'imagenet'
+
     print("Loading training data")
     st = time.time()
-    cache_path = _get_cache_path(traindir)
-    if args.cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print(f"Loading dataset_train from {cache_path}")
-        dataset, _ = torch.load(cache_path)
-    else:
-        # We need a default value for the variables below because args may come
-        # from train_quantization.py which doesn't define them.
+    
+    if use_parquet:
+        # Load from parquet files with pseudo labels
         auto_augment_policy = getattr(args, "auto_augment", None)
         random_erase_prob = getattr(args, "random_erase", 0.0)
         ra_magnitude = getattr(args, "ra_magnitude", None)
         augmix_severity = getattr(args, "augmix_severity", None)
-        dataset = torchvision.datasets.ImageFolder(
-            traindir,
-            presets.ClassificationPresetTrain(
-                crop_size=train_crop_size,
-                interpolation=interpolation,
-                auto_augment_policy=auto_augment_policy,
-                random_erase_prob=random_erase_prob,
-                ra_magnitude=ra_magnitude,
-                augmix_severity=augmix_severity,
-                backend=args.backend,
-                use_v2=args.use_v2,
-            ),
+        
+        transform = presets.ClassificationPresetTrain(
+            crop_size=train_crop_size,
+            interpolation=interpolation,
+            auto_augment_policy=auto_augment_policy,
+            random_erase_prob=random_erase_prob,
+            ra_magnitude=ra_magnitude,
+            augmix_severity=augmix_severity,
+            backend=args.backend,
+            use_v2=args.use_v2,
         )
-        if args.cache_dataset:
-            print(f"Saving dataset_train to {cache_path}")
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset, traindir), cache_path)
+        
+        dataset = ImageNetParquetDataset(
+            csv_path=args.pseudo_label_csv,
+            parquet_dir=args.parquet_data_dir,
+            transform=transform
+        )
+        print(f"Loaded parquet dataset with {len(dataset)} samples")
+    else:
+        cache_path = _get_cache_path(traindir)
+        if args.cache_dataset and os.path.exists(cache_path):
+            # Attention, as the transforms are also cached!
+            print(f"Loading dataset_train from {cache_path}")
+            dataset, _ = torch.load(cache_path)
+        else:
+            # We need a default value for the variables below because args may come
+            # from train_quantization.py which doesn't define them.
+            auto_augment_policy = getattr(args, "auto_augment", None)
+            random_erase_prob = getattr(args, "random_erase", 0.0)
+            ra_magnitude = getattr(args, "ra_magnitude", None)
+            augmix_severity = getattr(args, "augmix_severity", None)
+            dataset = torchvision.datasets.ImageFolder(
+                traindir,
+                presets.ClassificationPresetTrain(
+                    crop_size=train_crop_size,
+                    interpolation=interpolation,
+                    auto_augment_policy=auto_augment_policy,
+                    random_erase_prob=random_erase_prob,
+                    ra_magnitude=ra_magnitude,
+                    augmix_severity=augmix_severity,
+                    backend=args.backend,
+                    use_v2=args.use_v2,
+                ),
+            )
+            if args.cache_dataset:
+                print(f"Saving dataset_train to {cache_path}")
+                utils.mkdir(os.path.dirname(cache_path))
+                utils.save_on_master((dataset, traindir), cache_path)
     print("Took", time.time() - st)
 
     print("Loading validation data")
-    cache_path = _get_cache_path(valdir)
-    if args.cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print(f"Loading dataset_test from {cache_path}")
-        dataset_test, _ = torch.load(cache_path)
-    else:
+    
+    if use_parquet:
+        # Load validation data from parquet with true labels
         if args.weights and args.test_only:
             weights = torchvision.models.get_weight(args.weights)
             preprocessing = weights.transforms(antialias=True)
             if args.backend == "tensor":
                 preprocessing = torchvision.transforms.Compose([torchvision.transforms.PILToTensor(), preprocessing])
-
         else:
             preprocessing = presets.ClassificationPresetEval(
                 crop_size=val_crop_size,
@@ -178,15 +212,44 @@ def load_data(traindir, valdir, args):
                 backend=args.backend,
                 use_v2=args.use_v2,
             )
-
-        dataset_test = torchvision.datasets.ImageFolder(
-            valdir,
-            preprocessing,
+        
+        dataset_test = ImageNetParquetDataset(
+            csv_path=args.pseudo_label_csv_val,
+            parquet_dir=args.parquet_data_dir,
+            transform=preprocessing,
+            use_true_labels=True  # Use true labels for validation
         )
-        if args.cache_dataset:
-            print(f"Saving dataset_test to {cache_path}")
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset_test, valdir), cache_path)
+        print(f"Loaded validation parquet dataset with {len(dataset_test)} samples")
+    else:
+        cache_path = _get_cache_path(valdir)
+        if args.cache_dataset and os.path.exists(cache_path):
+            # Attention, as the transforms are also cached!
+            print(f"Loading dataset_test from {cache_path}")
+            dataset_test, _ = torch.load(cache_path)
+        else:
+            if args.weights and args.test_only:
+                weights = torchvision.models.get_weight(args.weights)
+                preprocessing = weights.transforms(antialias=True)
+                if args.backend == "tensor":
+                    preprocessing = torchvision.transforms.Compose([torchvision.transforms.PILToTensor(), preprocessing])
+
+            else:
+                preprocessing = presets.ClassificationPresetEval(
+                    crop_size=val_crop_size,
+                    resize_size=val_resize_size,
+                    interpolation=interpolation,
+                    backend=args.backend,
+                    use_v2=args.use_v2,
+                )
+
+            dataset_test = torchvision.datasets.ImageFolder(
+                valdir,
+                preprocessing,
+            )
+            if args.cache_dataset:
+                print(f"Saving dataset_test to {cache_path}")
+                utils.mkdir(os.path.dirname(cache_path))
+                utils.save_on_master((dataset_test, valdir), cache_path)
 
     print("Creating data loaders")
     if args.distributed:
@@ -224,7 +287,16 @@ def main(args):
     val_dir = os.path.join(args.data_path, "val")
     dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
-    num_classes = len(dataset.classes)
+    # Get number of classes - works for both ImageFolder and parquet datasets
+    if hasattr(dataset, 'num_classes'):
+        num_classes = dataset.num_classes
+    elif hasattr(dataset, 'classes'):
+        num_classes = len(dataset.classes)
+    else:
+        # Fallback: infer from targets
+        num_classes = len(set(dataset.targets))
+    
+    print(f"Dataset has {num_classes} classes")
     mixup_cutmix = get_mixup_cutmix(
         mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_categories=num_classes, use_v2=args.use_v2
     )
@@ -540,6 +612,13 @@ def get_args_parser(add_help=True):
     parser.add_argument("--weights", default=None, type=str, help="the weights enum name to load")
     parser.add_argument("--backend", default="PIL", type=str.lower, help="PIL or tensor - case insensitive")
     parser.add_argument("--use-v2", action="store_true", help="Use V2 transforms")
+    
+    # Parquet dataset support
+    parser.add_argument("--use-parquet-dataset", action="store_true", help="Use parquet dataset format")
+    parser.add_argument("--parquet-data-dir", type=str, default=None, help="Directory containing parquet files")
+    parser.add_argument("--pseudo-label-csv", type=str, default=None, help="CSV file with pseudo labels for training")
+    parser.add_argument("--pseudo-label-csv-val", type=str, default=None, help="CSV file with labels for validation")
+    
     return parser
 
 

@@ -83,6 +83,14 @@ start=$(date +%s%N) # %s%N for seconds and nanoseconds
 
 if [ "${RUN_PRETRAIN}" = true ]; then
     cd ./pretrain/
+    
+    # Add parquet support for ImageNet-1K
+    PRETRAIN_PARQUET_ARGS=""
+    if [[ "${DATASET}" == "imagenet" ]]; then
+        CSV_ROOT="/home/ssl.distillation/clustering/results/temi_imagenet-1k_1000clusters_20251224_194551/pseudo_labels/"
+        PRETRAIN_PARQUET_ARGS="--use-parquet-dataset --parquet-data-dir ${DATA_PATH}/data --pseudo-label-csv ${CSV_ROOT}train_image_pseudo_labels.csv --pseudo-label-csv-val ${CSV_ROOT}test_image_pseudo_labels.csv"
+    fi
+    
     CUDA_VISIBLE_DEVICES=${GPU} python pretrain.py \
         --dataset ${DATASET} \
         --model ${MODEL} \
@@ -95,7 +103,8 @@ if [ "${RUN_PRETRAIN}" = true ]; then
         --lr-scheduler cosine \
         --epochs 50 \
         --augmix-severity 0 \
-        --ra-magnitude 0
+        --ra-magnitude 0 \
+        ${PRETRAIN_PARQUET_ARGS}
     cd ..
 fi
 
