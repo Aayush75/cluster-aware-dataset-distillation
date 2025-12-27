@@ -26,16 +26,11 @@ class ImageNetParquetDataset(Dataset):
     """
     
     def __init__(self, parquet_dir, csv_path, label_column='pseudo_label_class_index', 
-                 transform=None, cache_parquet=False, use_true_labels=False):
+                 transform=None, cache_parquet=False):
         self.parquet_dir = parquet_dir
         self.transform = transform
         self.cache_parquet = cache_parquet
-        
-        # Determine which label column to use
-        if use_true_labels:
-            self.label_column = 'true_label_index'
-        else:
-            self.label_column = label_column
+        self.label_column = label_column
         
         # Load CSV mappings
         print(f"Loading CSV from: {csv_path}")
@@ -100,11 +95,6 @@ class ImageNetParquetDataset(Dataset):
         # Get unique parquet files
         unique_parquets = set(loc[0] for loc in self.image_locations)
         print(f"Dataset spans {len(unique_parquets)} parquet files from {split} split")
-        
-        # Add classes attribute for compatibility with ImageFolder interface
-        unique_labels = sorted(set(self.targets))
-        self.classes = [str(i) for i in unique_labels]  # Create class names as strings
-        self.num_classes = len(self.classes)
     
     def _load_parquet(self, parquet_file):
         """Load a parquet file, with optional caching."""
