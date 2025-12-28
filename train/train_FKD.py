@@ -40,7 +40,7 @@ from models.factory import ModelFactory
 def get_args():
     parser = argparse.ArgumentParser("FKD Training on ImageNet-1K")
     parser.add_argument("--dataset", default="imagenet", type=str,
-                        choices=["imagenet", "tiny-imagenet", "imagenette", "cifar100"], help="dataset name")
+                        choices=["imagenet", "imagenet_data", "tiny-imagenet", "imagenette", "cifar100"], help="dataset name")
     parser.add_argument('--batch-size', type=int,
                         default=1024, help='batch size')
     parser.add_argument('--input-size', default=224, type=int, metavar='S',
@@ -232,7 +232,7 @@ def main():
     # load student model
     print("=> loading student model '{}'".format(args.model))
 
-    num_class_map = {"imagenet": 1000, "tiny-imagenet": 200, "imagenette": 10, "cifar100": 100}
+    num_class_map = {"imagenet": 1000, "imagenet_data": 1000, "tiny-imagenet": 200, "imagenette": 10, "cifar100": 100}
     assert args.dataset in num_class_map
     args.num_classes = num_class_map[args.dataset]
 

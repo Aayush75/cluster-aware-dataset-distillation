@@ -50,13 +50,13 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-DATASETS = {"imagenet", "tiny-imagenet", "imagenette", "cifar100", "wolf", "birds", "fruits", "cats", "a", "b", "c", "d", "e"}
+DATASETS = {"imagenet", "imagenet_data", "tiny-imagenet", "imagenette", "cifar100", "wolf", "birds", "fruits", "cats", "a", "b", "c", "d", "e"}
 
 
 def get_num_class_map(datasets):
     num_class_map = dict()
     for d in datasets:
-        if d == "imagenet":
+        if d == "imagenet" or d == "imagenet_data":
             num_class_map[d] = 1000
         elif d == "tiny-imagenet":
             num_class_map[d] = 200

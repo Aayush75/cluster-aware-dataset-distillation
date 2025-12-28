@@ -24,7 +24,7 @@ from models.factory import ModelFactory
 
 parser = argparse.ArgumentParser(description='FKD Soft Label Generation on ImageNet-1K w/ Mix Augmentation')
 parser.add_argument("--dataset", default="imagenet", type=str,
-                        choices=["imagenet", "tiny-imagenet", "imagenette", "cifar100"], help="dataset name")
+                        choices=["imagenet", "imagenet_data", "tiny-imagenet", "imagenette", "cifar100"], help="dataset name")
 parser.add_argument('--data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('-m', '--model', metavar='MODEL', default='resnet18')
@@ -143,7 +143,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                 world_size=args.world_size, rank=args.rank)
     print("=> using pytorch pre-trained model '{}'".format(args.model))
 
-    num_class_map = {"imagenet": 1000, "tiny-imagenet": 200, "imagenette": 10, "cifar100": 100}
+    num_class_map = {"imagenet": 1000, "imagenet_data": 1000, "tiny-imagenet": 200, "imagenette": 10, "cifar100": 100}
     assert args.dataset in num_class_map
     args.num_classes = num_class_map[args.dataset]
     model = ModelFactory.create(args.model, args, args.num_classes)

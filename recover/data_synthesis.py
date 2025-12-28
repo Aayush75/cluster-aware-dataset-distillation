@@ -334,7 +334,7 @@ def get_args():
         "SRe2L: recover data from pre-trained model")
     """Data save flags"""
     parser.add_argument("--dataset", default="imagenet", type=str,
-                        choices=["imagenet", "tiny-imagenet", "imagenette", "cifar100"], help="dataset name")
+                        choices=["imagenet", "imagenet_data", "tiny-imagenet", "imagenette", "cifar100"], help="dataset name")
     parser.add_argument('--exp-name', type=str, default='test',
                         help='name of the experiment, subfolder under syn_data_path/{dataset}')
     parser.add_argument('--syn-data-path', type=str,
@@ -389,7 +389,7 @@ def get_args():
     args = parser.parse_args()
 
     args.syn_data_path = os.path.join(args.syn_data_path, args.dataset, args.exp_name)
-    num_class_map = {"imagenet": 1000, "tiny-imagenet": 200, "imagenette": 10, "cifar100": 100}
+    num_class_map = {"imagenet": 1000, "imagenet_data": 1000, "tiny-imagenet": 200, "imagenette": 10, "cifar100": 100}
     assert args.dataset in num_class_map
     args.num_classes = num_class_map[args.dataset]
 

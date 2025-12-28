@@ -66,7 +66,7 @@ fi
 
 # Handle the case when the dataset has 10 classes and IPC is small, the effective batchsize in the relableling step is
 # smaller, causing error in the FKD step.
-if [[ "${DATASET}" != "tiny-imagenet" && "${DATASET}" != "imagenet" && "${IPC}" -lt 10 ]]; then
+if [[ "${DATASET}" != "tiny-imagenet" && "${DATASET}" != "imagenet" && "${DATASET}" != "imagenet_data" && "${IPC}" -lt 10 ]]; then
     KD_BATCH_SIZE=$((10 * IPC))
 else
     KD_BATCH_SIZE=100

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 RUN_PRETRAIN=false  # Set to false to skip pretraining
-DATASET="imagenet"
+DATASET="imagenet_data"
 MODEL="resnet18"
 EVAL_MODEL="resnet18"
 DATA_ROOT="/home/ssl.disitillation/WMDD/datasets/"

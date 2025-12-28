@@ -411,7 +411,7 @@ def get_args_parser(add_help=True):
     parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
 
     parser.add_argument("--dataset", default="imagenet", type=str,
-                        choices=["imagenet", "tiny-imagenet", "imagenette", "cifar100"], help="dataset path")
+                        choices=["imagenet", "imagenet_data", "tiny-imagenet", "imagenette", "cifar100"], help="dataset path")
     parser.add_argument("--data-path", default="/media/techt/DATA/data/tiny-imagenet", type=str, help="dataset path")
     parser.add_argument("--model", default="resnet18", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
